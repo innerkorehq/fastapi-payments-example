@@ -1,0 +1,38 @@
+version: '3.8'
+
+services:
+  backend:
+    build:
+      context: ./backend
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=sqlite+aiosqlite:///./payments.db
+      - STRIPE_API_KEY=${STRIPE_API_KEY:-sk_test_your_test_key}
+      - STRIPE_WEBHOOK_SECRET=${STRIPE_WEBHOOK_SECRET:-whsec_your_webhook_secret}
+      - MESSAGE_BROKER_TYPE=memory
+      - PAYMENT_SANDBOX_MODE=true
+      - DEBUG=true
+    volumes:
+      - ./backend:/app
+      # Exclude patches directory to prevent it from being overwritten by the volume mount
+      - /app/patches
+    command: >
+      sh -c "python patches/fix_provider_init.py && 
+             uvicorn main:app --host 0.0.0.0 --port 8000 --reload"
+
+  frontend:
+    build:
+      context: ./frontend
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:8000
+      - NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY=${NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY:-pk_test_your_publishable_key}
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+      - /app/.next
+    command: npm run dev
+    depends_on:
+      - backend
