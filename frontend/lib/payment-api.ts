@@ -7,15 +7,15 @@ export const customerApi = {
     const response = await apiClient.get('/customers');
     return response.data;
   },
-  
+
   // Get a specific customer
-  getById: async (id) => {
+  getById: async (id: string) => {
     const response = await apiClient.get(`/customers/${id}`);
     return response.data;
   },
-  
+
   // Create a new customer
-  create: async (data) => {
+  create: async (data: any) => {
     const response = await apiClient.post('/customers', data);
     return response.data;
   }
@@ -24,19 +24,19 @@ export const customerApi = {
 // Payment Methods API methods
 export const paymentMethodApi = {
   // Get all payment methods for a customer
-  getAllForCustomer: async (customerId) => {
+  getAllForCustomer: async (customerId: string) => {
     const response = await apiClient.get(`/customers/${customerId}/payment-methods`);
     return response.data;
   },
-  
+
   // Create a payment method for a customer
-  create: async (customerId, data) => {
+  create: async (customerId: string, data: any) => {
     const response = await apiClient.post(`/customers/${customerId}/payment-methods`, data);
     return response.data;
   },
-  
+
   // Delete a payment method
-  delete: async (customerId, paymentMethodId) => {
+  delete: async (customerId: string, paymentMethodId: string) => {
     const response = await apiClient.delete(`/customers/${customerId}/payment-methods/${paymentMethodId}`);
     return response.data;
   }
@@ -45,13 +45,19 @@ export const paymentMethodApi = {
 // Payments API methods
 export const paymentApi = {
   // Create a one-time payment
-  create: async (data) => {
+  create: async (data: any) => {
     const response = await apiClient.post('/payments', data);
     return response.data;
   },
-  
+
+  // Get all payments
+  getAll: async () => {
+    const response = await apiClient.get('/payments');
+    return response.data;
+  },
+
   // Get all payments for a customer
-  getAllForCustomer: async (customerId) => {
+  getAllForCustomer: async (customerId: string) => {
     const response = await apiClient.get(`/customers/${customerId}/payments`);
     return response.data;
   }
@@ -60,19 +66,25 @@ export const paymentApi = {
 // Subscriptions API methods
 export const subscriptionApi = {
   // Create a subscription
-  create: async (customerId, data) => {
+  create: async (customerId: string, data: any) => {
     const response = await apiClient.post(`/customers/${customerId}/subscriptions`, data);
     return response.data;
   },
-  
+
   // Get all subscriptions for a customer
-  getAllForCustomer: async (customerId) => {
+  getAllForCustomer: async (customerId: string) => {
     const response = await apiClient.get(`/customers/${customerId}/subscriptions`);
     return response.data;
   },
-  
+
+  // Get all subscriptions
+  getAll: async () => {
+    const response = await apiClient.get('/subscriptions');
+    return response.data;
+  },
+
   // Cancel a subscription
-  cancel: async (subscriptionId) => {
+  cancel: async (subscriptionId: string) => {
     const response = await apiClient.post(`/subscriptions/${subscriptionId}/cancel`);
     return response.data;
   }
@@ -85,21 +97,21 @@ export const productApi = {
     const response = await apiClient.get('/products');
     return response.data;
   },
-  
+
   // Create a product
-  create: async (data) => {
+  create: async (data: any) => {
     const response = await apiClient.post('/products', data);
     return response.data;
   },
-  
+
   // Get all plans for a product
-  getPlans: async (productId) => {
+  getPlans: async (productId: string) => {
     const response = await apiClient.get(`/products/${productId}/plans`);
     return response.data;
   },
-  
+
   // Create a plan for a product
-  createPlan: async (productId, data) => {
+  createPlan: async (productId: string, data: any) => {
     const response = await apiClient.post(`/products/${productId}/plans`, data);
     return response.data;
   }

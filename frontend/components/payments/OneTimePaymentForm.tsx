@@ -2,12 +2,17 @@ import React, { useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { paymentApi } from '../../lib/payment-api';
 
-export default function OneTimePaymentForm({ customerId, onSuccess }) {
+interface OneTimePaymentFormProps {
+  customerId: string;
+  onSuccess?: (payment: any) => void;
+}
+
+export default function OneTimePaymentForm({ customerId, onSuccess }: OneTimePaymentFormProps) {
   const { register, handleSubmit, formState: { errors }, reset } = useForm();
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [error, setError] = useState(null);
+  const [error, setError] = useState<string | null>(null);
   
-  const onSubmit = async (data) => {
+  const onSubmit = async (data: any) => {
     setIsSubmitting(true);
     setError(null);
     
@@ -22,25 +27,11 @@ export default function OneTimePaymentForm({ customerId, onSuccess }) {
         payment_method_id: data.payment_method_id || 'pm_card_visa' // Mock payment method ID
       };
       
-      // In a real application, this would call your API
-      // For this demo, we'll simulate a successful payment
-      // const response = await paymentApi.create(paymentData);
-      
-      // Simulated response
-      const mockResponse = {
-        id: `pay_${Math.random().toString(36).substring(2, 10)}`,
-        amount: paymentData.amount,
-        currency: paymentData.currency,
-        customer_id: customerId,
-        description: paymentData.description,
-        status: 'succeeded',
-        created_at: new Date().toISOString()
-      };
-      
+      const response = await paymentApi.create(paymentData);
       reset();
-      if (onSuccess) onSuccess(mockResponse);
+      if (onSuccess) onSuccess(response);
       
-    } catch (err) {
+    } catch (err: any) {
       console.error('Payment processing error:', err);
       setError(err.response?.data?.detail || 'Failed to process payment');
     } finally {
@@ -83,7 +74,7 @@ export default function OneTimePaymentForm({ customerId, onSuccess }) {
               })}
             />
             {errors.amount && (
-              <p className="mt-1 text-sm text-red-600">{errors.amount.message}</p>
+              <p className="mt-1 text-sm text-red-600">{errors.amount.message?.toString()}</p>
             )}
           </div>
         </div>
@@ -104,7 +95,7 @@ export default function OneTimePaymentForm({ customerId, onSuccess }) {
               <option value="GBP">GBP</option>
             </select>
             {errors.currency && (
-              <p className="mt-1 text-sm text-red-600">{errors.currency.message}</p>
+              <p className="mt-1 text-sm text-red-600">{errors.currency.message?.toString()}</p>
             )}
           </div>
         </div>

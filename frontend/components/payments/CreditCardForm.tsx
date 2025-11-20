@@ -39,7 +39,7 @@ const CreditCardForm: React.FC<CreditCardFormProps> = ({ customerId, onSuccess }
       }
       
       // Add payment method to the customer
-      const result = await paymentMethodApi.createPaymentMethod(customerId, {
+      const result = await paymentMethodApi.create(customerId, {
         type: 'card',
         token: paymentMethod?.id,
         set_default: true,

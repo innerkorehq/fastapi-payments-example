@@ -17,9 +17,7 @@ services:
       - ./backend:/app
       # Exclude patches directory to prevent it from being overwritten by the volume mount
       - /app/patches
-    command: >
-      sh -c "python patches/fix_provider_init.py && 
-             uvicorn main:app --host 0.0.0.0 --port 8000 --reload"
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 
   frontend:
     build:
@@ -30,7 +28,19 @@ services:
       - NEXT_PUBLIC_API_URL=http://localhost:8000
       - NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY=${NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY:-pk_test_your_publishable_key}
     volumes:
-      - ./frontend:/app
+      - ./frontend/app:/app/app
+      - ./frontend/components:/app/components
+      - ./frontend/lib:/app/lib
+      - ./frontend/public:/app/public
+      - ./frontend/styles:/app/styles
+      - ./frontend/package.json:/app/package.json
+      - ./frontend/package-lock.json:/app/package-lock.json
+      - ./frontend/next.config.js:/app/next.config.js
+      - ./frontend/postcss.config.js:/app/postcss.config.js
+      - ./frontend/tailwind.config.js:/app/tailwind.config.js
+      - ./frontend/tsconfig.json:/app/tsconfig.json
+      - ./frontend/next-env.d.ts:/app/next-env.d.ts
+      - ./frontend/components.json:/app/components.json
       - /app/node_modules
       - /app/.next
     command: npm run dev
