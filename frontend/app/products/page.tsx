@@ -11,19 +11,33 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Separator } from '@/components/ui/separator';
 import { productApi } from '../../lib/payment-api';
+import getFriendlyApiError from '../../lib/api-utils';
 import { Package, Plus, AlertCircle, DollarSign } from 'lucide-react';
 
 // Product creation form component
-const ProductForm = ({ onSuccess }: { onSuccess: (product: any) => void }) => {
-  const { register, handleSubmit, formState: { errors, isSubmitting }, reset } = useForm();
+const ProductForm = ({ onSuccess, onError }: { onSuccess: (product: any) => void, onError: (message: string | null) => void }) => {
+  const { register, handleSubmit, setError, formState: { errors, isSubmitting }, reset } = useForm();
   
   const onSubmit = async (data: any) => {
     try {
       const product = await productApi.create(data);
       onSuccess(product);
       reset();
-    } catch (error) {
-      console.error('Error creating product:', error);
+    } catch (error: any) {
+      const details = error?.response?.data?.detail;
+      if (Array.isArray(details)) {
+        details.forEach((d: any) => {
+          const loc = d?.loc;
+          if (Array.isArray(loc) && loc.length >= 2) {
+            const field = loc[1];
+            setError(field as any, { type: 'server', message: d?.msg });
+          }
+        });
+      }
+
+      const message = getFriendlyApiError(error);
+      onError(message);
+      console.error('Error creating product:', message, error);
     }
   };
   
@@ -59,16 +73,55 @@ const ProductForm = ({ onSuccess }: { onSuccess: (product: any) => void }) => {
 };
 
 // Plan creation form component
-const PlanForm = ({ productId, onSuccess }: { productId: string, onSuccess: (plan: any) => void }) => {
-  const { register, handleSubmit, formState: { errors, isSubmitting }, reset, setValue } = useForm();
+const PlanForm = ({ productId, onSuccess, onError }: { productId: string, onSuccess: (plan: any) => void, onError: (message: string | null) => void }) => {
+  type PlanFormData = {
+    name?: string;
+    description?: string;
+    pricing_model?: string;
+    currency?: string;
+    amount?: number;
+    billing_interval?: string;
+    billing_interval_count?: number;
+  };
+
+  const { register, handleSubmit, setError, formState: { errors, isSubmitting }, reset, setValue } = useForm<PlanFormData>({
+    defaultValues: {
+      pricing_model: 'subscription',
+      currency: 'USD',
+      billing_interval: 'month',
+      billing_interval_count: 1,
+    }
+  });
   
   const onSubmit = async (data: any) => {
     try {
-      const plan = await productApi.createPlan(productId, data);
+      // Ensure numeric values are correct types for the API (FastAPI validation)
+      const payload = {
+        ...data,
+        amount: Number.parseFloat(String(data.amount ?? 0)),
+        billing_interval_count: Number.parseInt(String(data.billing_interval_count ?? 1), 10),
+      };
+
+      const plan = await productApi.createPlan(productId, payload);
       onSuccess(plan);
       reset();
-    } catch (error) {
-      console.error('Error creating plan:', error);
+    } catch (error: any) {
+      // If the server returned Pydantic validation errors, map to form fields
+      const details = error?.response?.data?.detail;
+      if (Array.isArray(details)) {
+        details.forEach((d: any) => {
+          // Typical shape: { loc: ['body', '<field>'], msg: '...' }
+          const loc = d?.loc;
+          if (Array.isArray(loc) && loc.length >= 2) {
+            const field = loc[1];
+            setError(field as any, { type: 'server', message: d?.msg });
+          }
+        });
+      }
+
+      const message = getFriendlyApiError(error);
+      onError(message);
+      console.error('Error creating plan:', message, error);
     }
   };
   
@@ -79,7 +132,7 @@ const PlanForm = ({ productId, onSuccess }: { productId: string, onSuccess: (pla
         <Input
           id="name"
           placeholder="e.g., Basic Monthly"
-          {...register('name', { required: 'Plan name is required' })}
+          {...register('name', { required: 'Plan name is required' } as const)}
         />
         {errors.name && (
           <p className="text-sm text-destructive">{errors.name.message?.toString()}</p>
@@ -98,7 +151,7 @@ const PlanForm = ({ productId, onSuccess }: { productId: string, onSuccess: (pla
       
       <div className="space-y-2">
         <Label htmlFor="pricing_model">Pricing Model</Label>
-        <Select onValueChange={(value) => setValue('pricing_model', value)} defaultValue="subscription">
+        <Select onValueChange={(value) => setValue('pricing_model', value, { shouldDirty: true, shouldValidate: true })} defaultValue="subscription">
           <SelectTrigger id="pricing_model">
             <SelectValue />
           </SelectTrigger>
@@ -110,6 +163,9 @@ const PlanForm = ({ productId, onSuccess }: { productId: string, onSuccess: (pla
             <SelectItem value="freemium">Freemium</SelectItem>
           </SelectContent>
         </Select>
+        {/* Ensure RHF knows this field exists by registering it - the Select is a custom
+            component and doesn't automatically register the native input. */}
+        <input type="hidden" {...register('pricing_model')} />
       </div>
       
       <div className="grid grid-cols-2 gap-4">
@@ -130,7 +186,7 @@ const PlanForm = ({ productId, onSuccess }: { productId: string, onSuccess: (pla
         
         <div className="space-y-2">
           <Label htmlFor="currency">Currency</Label>
-          <Select onValueChange={(value) => setValue('currency', value)} defaultValue="USD">
+          <Select onValueChange={(value) => setValue('currency', value, { shouldDirty: true, shouldValidate: true })} defaultValue="USD">
             <SelectTrigger id="currency">
               <SelectValue />
             </SelectTrigger>
@@ -140,13 +196,14 @@ const PlanForm = ({ productId, onSuccess }: { productId: string, onSuccess: (pla
               <SelectItem value="GBP">GBP</SelectItem>
             </SelectContent>
           </Select>
+            <input type="hidden" {...register('currency')} />
         </div>
       </div>
       
       <div className="grid grid-cols-2 gap-4">
         <div className="space-y-2">
           <Label htmlFor="billing_interval">Billing Interval</Label>
-          <Select onValueChange={(value) => setValue('billing_interval', value)} defaultValue="month">
+          <Select onValueChange={(value) => setValue('billing_interval', value, { shouldDirty: true, shouldValidate: true })} defaultValue="month">
             <SelectTrigger id="billing_interval">
               <SelectValue />
             </SelectTrigger>
@@ -157,6 +214,10 @@ const PlanForm = ({ productId, onSuccess }: { productId: string, onSuccess: (pla
               <SelectItem value="year">Yearly</SelectItem>
             </SelectContent>
           </Select>
+            <input type="hidden" {...register('billing_interval', { required: 'Billing interval is required' })} />
+            {errors.billing_interval && (
+              <p className="text-sm text-destructive">{errors.billing_interval.message?.toString()}</p>
+            )}
         </div>
         
         <div className="space-y-2">
@@ -207,7 +268,8 @@ export default function ProductsPage() {
         const allPlans = plansArrays.flat();
         setPlans(allPlans);
       } catch (error: any) {
-        setError(error.message || 'An error occurred while fetching products');
+        const message = getFriendlyApiError(error);
+        setError(message);
       } finally {
         setIsLoading(false);
       }
@@ -219,11 +281,13 @@ export default function ProductsPage() {
   const handleProductCreated = (product: any) => {
     setProducts([...products, product]);
     setShowProductForm(false);
+    setError(null);
   };
   
   const handlePlanCreated = (plan: any) => {
     setPlans([...plans, plan]);
     setSelectedProductId(null);
+    setError(null);
   };
   
   const getProductPlans = (productId: string) => {
@@ -266,7 +330,7 @@ export default function ProductsPage() {
             <CardDescription>Create a new product for your catalog</CardDescription>
           </CardHeader>
           <CardContent>
-            <ProductForm onSuccess={handleProductCreated} />
+            <ProductForm onSuccess={handleProductCreated} onError={setError} />
           </CardContent>
         </Card>
       )}
@@ -290,6 +354,7 @@ export default function ProductsPage() {
             <PlanForm 
               productId={selectedProductId} 
               onSuccess={handlePlanCreated} 
+              onError={setError}
             />
           </CardContent>
         </Card>

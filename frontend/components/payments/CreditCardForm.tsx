@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { CardElement, useStripe, useElements } from '@stripe/react-stripe-js';
-import { paymentMethodApi } from '../../lib/payment-api';
+import { paymentMethodApi, paymentSetupApi } from '../../lib/payment-api';
 
 interface CreditCardFormProps {
   customerId: string;
@@ -29,20 +29,30 @@ const CreditCardForm: React.FC<CreditCardFormProps> = ({ customerId, onSuccess }
         throw new Error('Card element not found');
       }
       
-      const { error, paymentMethod } = await stripe.createPaymentMethod({
-        type: 'card',
-        card: cardElement,
+      // Create a SetupIntent on the backend so we can complete 3DS and
+      // attach the card to the customer when necessary (required in India).
+      const setup = await paymentSetupApi.createSetupIntent(customerId, { usage: 'off_session' });
+      if (!setup?.client_secret) throw new Error('Failed to create setup intent');
+
+      const confirmResult = await stripe.confirmCardSetup(setup.client_secret, {
+        payment_method: { card: cardElement },
       });
-      
-      if (error) {
-        throw error;
-      }
-      
-      // Add payment method to the customer
+
+      if (confirmResult.error) throw confirmResult.error;
+
+      const si: any = confirmResult.setupIntent || {};
+      const pmId = si.payment_method;
+      const mandateId = si.mandate?.id || si.mandate || undefined;
+      if (!pmId) throw new Error('Unable to determine payment method from SetupIntent');
+
+      // Tell the backend about the new payment method (the provider will handle
+      // attach/skip if already attached).
       const result = await paymentMethodApi.create(customerId, {
         type: 'card',
-        token: paymentMethod?.id,
+        payment_method_id: pmId,
         set_default: true,
+        setup_intent_id: si.id,
+        mandate_id: mandateId,
       });
       
       if (onSuccess) onSuccess(result);

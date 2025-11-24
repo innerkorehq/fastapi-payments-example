@@ -1,39 +1,126 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useForm } from 'react-hook-form';
-import { paymentApi } from '../../lib/payment-api';
+import getFriendlyApiError from '../../lib/api-utils';
+import { paymentApi, paymentMethodApi } from '../../lib/payment-api';
 
 interface OneTimePaymentFormProps {
   customerId: string;
+  paymentMethods?: any[];
   onSuccess?: (payment: any) => void;
+  onError?: (message: string | null) => void;
 }
 
-export default function OneTimePaymentForm({ customerId, onSuccess }: OneTimePaymentFormProps) {
-  const { register, handleSubmit, formState: { errors }, reset } = useForm();
+export default function OneTimePaymentForm({ customerId, paymentMethods: paymentMethodsProp, onSuccess, onError }: OneTimePaymentFormProps) {
+  const { register, handleSubmit, setError: setFieldError, formState: { errors }, reset } = useForm({
+    defaultValues: {
+      amount: '',
+      currency: 'USD',
+      description: '',
+      payment_method_id: '',
+    },
+  });
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [paymentMethods, setPaymentMethods] = useState<any[]>(paymentMethodsProp || []);
+  const [isLoadingMethods, setIsLoadingMethods] = useState(false);
+
+  useEffect(() => {
+    if (paymentMethodsProp) {
+      setPaymentMethods(paymentMethodsProp);
+      setIsLoadingMethods(false);
+      return;
+    }
+
+    const fetchPaymentMethods = async () => {
+      setIsLoadingMethods(true);
+      try {
+        const methods = await paymentMethodApi.getAllForCustomer(customerId);
+        setPaymentMethods(methods);
+      } catch (err: any) {
+        console.error('Failed to load payment methods', err);
+        setError(err.response?.data?.detail || 'Failed to load payment methods');
+      } finally {
+        setIsLoadingMethods(false);
+      }
+    };
+
+    if (customerId) {
+      fetchPaymentMethods();
+    }
+  }, [customerId, paymentMethodsProp]);
   
   const onSubmit = async (data: any) => {
     setIsSubmitting(true);
     setError(null);
     
     try {
-      // Format amount as cents/smallest currency unit
-      const paymentData = {
+      const payload: any = {
         amount: parseFloat(data.amount),
         currency: data.currency,
         customer_id: customerId,
         description: data.description,
-        // In a real app, this would use Stripe Elements for secure payment
-        payment_method_id: data.payment_method_id || 'pm_card_visa' // Mock payment method ID
+        payment_method_id: data.payment_method_id,
       };
-      
-      const response = await paymentApi.create(paymentData);
-      reset();
+
+      // If the selected payment method has a mandate id (created via SetupIntent)
+      // include it so the backend/provider can use that mandate for off-session
+      // payments (required by India rules).
+      if (data.payment_method_id) {
+        const selected = paymentMethods.find((m) => m.id === data.payment_method_id);
+        if (selected?.mandate_id) payload.mandate_id = selected.mandate_id;
+      }
+
+      if (!payload.payment_method_id) {
+        throw new Error('Please select a payment method');
+      }
+
+      const response = await paymentApi.create(payload);
+
+      // If the provider returned a hosted checkout redirect (e.g. PayU),
+      // the library stores it under meta_info.provider_data.<provider>.redirect
+      // — detect and submit a hidden form to navigate to the provider checkout.
+      const providerRedirect = response?.meta_info?.provider_data?.payu?.redirect || response?.meta_info?.provider_data?.payu;
+      if (providerRedirect && providerRedirect.action_url && providerRedirect.fields) {
+        // Build and submit a form to perform the POST redirect
+        const form = document.createElement('form');
+        form.method = (providerRedirect.method || 'POST').toUpperCase();
+        form.action = providerRedirect.action_url;
+        form.style.display = 'none';
+
+        Object.keys(providerRedirect.fields).forEach((key) => {
+          const input = document.createElement('input');
+          input.type = 'hidden';
+          input.name = key;
+          // Ensure value is stringified
+          input.value = String((providerRedirect.fields as any)[key] ?? '');
+          form.appendChild(input);
+        });
+
+        document.body.appendChild(form);
+        form.submit();
+        return; // We are redirecting away from the app — don't continue
+      }
+
+      reset({ amount: '', currency: data.currency, description: '', payment_method_id: data.payment_method_id });
       if (onSuccess) onSuccess(response);
-      
+
     } catch (err: any) {
       console.error('Payment processing error:', err);
-      setError(err.response?.data?.detail || 'Failed to process payment');
+      // Map server validation errors to specific fields
+      const details = err?.response?.data?.detail;
+      if (Array.isArray(details)) {
+        details.forEach((d: any) => {
+          const loc = d?.loc;
+          if (Array.isArray(loc) && loc.length >= 2) {
+            const field = loc[1];
+            setFieldError(field as any, { type: 'server', message: d?.msg });
+          }
+        });
+      }
+
+      const message = getFriendlyApiError(err);
+      if (onError) onError(message);
+      setError(message as any);
     } finally {
       setIsSubmitting(false);
     }
@@ -115,11 +202,38 @@ export default function OneTimePaymentForm({ customerId, onSuccess }: OneTimePay
           />
         </div>
       </div>
+
+      <div>
+        <label htmlFor="payment_method_id" className="block text-sm font-medium text-gray-700">
+          Payment Method
+        </label>
+        <div className="mt-1">
+          <select
+            id="payment_method_id"
+            className="block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm"
+            {...register('payment_method_id', { required: 'Please select a payment method' })}
+            disabled={isLoadingMethods || paymentMethods.length === 0}
+          >
+            <option value="">{isLoadingMethods ? 'Loading...' : 'Select a payment method'}</option>
+            {paymentMethods.map((method) => (
+              <option key={method.id} value={method.id}>
+                {method.card ? `${method.card.brand?.toUpperCase()} •••• ${method.card.last4}` : method.id}
+              </option>
+            ))}
+          </select>
+          {errors.payment_method_id && (
+            <p className="mt-1 text-sm text-red-600">{errors.payment_method_id.message?.toString()}</p>
+          )}
+          {!isLoadingMethods && paymentMethods.length === 0 && (
+            <p className="mt-1 text-sm text-gray-500">Add a payment method before charging this customer.</p>
+          )}
+        </div>
+      </div>
       
       <div>
         <button
           type="submit"
-          disabled={isSubmitting}
+          disabled={isSubmitting || paymentMethods.length === 0}
           className="w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:bg-indigo-300"
         >
           {isSubmitting ? 'Processing...' : 'Process Payment'}

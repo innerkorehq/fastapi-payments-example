@@ -56,12 +56,12 @@ export default function CustomerDetail() {
   }, [customerId]);
   
   const handlePaymentMethodAdded = (paymentMethod: any) => {
-    setPaymentMethods([...paymentMethods, paymentMethod]);
+    setPaymentMethods((prev) => [...prev, paymentMethod]);
     setActiveTab('paymentMethods');
   };
   
   const handleSubscriptionCreated = (subscription: any) => {
-    setSubscriptions([...subscriptions, subscription]);
+    setSubscriptions((prev) => [...prev, subscription]);
     setActiveTab('subscriptions');
   };
   
@@ -109,7 +109,8 @@ export default function CustomerDetail() {
           <h1 className="text-2xl font-semibold text-gray-900">{customer.name || 'Customer'}</h1>
           <p className="text-gray-500">{customer.email}</p>
         </div>
-        <div className="mt-4 md:mt-0">
+        <div className="mt-4 md:mt-0 flex gap-4 items-center">
+          <Link href={`/customers/${customer.id}/edit`} className="text-sm px-3 py-1 rounded border bg-white hover:bg-gray-50 text-indigo-600">Edit</Link>
           <Link href="/customers" className="text-indigo-600 hover:underline">
             Back to Customers
           </Link>
@@ -181,6 +182,14 @@ export default function CustomerDetail() {
                 <dt className="text-sm font-medium text-gray-500">Name</dt>
                 <dd className="mt-1 text-sm text-gray-900">{customer.name || 'Not provided'}</dd>
               </div>
+              {customer.address && (
+                <div>
+                  <dt className="text-sm font-medium text-gray-500">Address</dt>
+                  <dd className="mt-1 text-sm text-gray-900">
+                    {customer.address.line1}{customer.address.line2 ? `, ${customer.address.line2}` : ''}{customer.address.city ? `, ${customer.address.city}` : ''}{customer.address.state ? `, ${customer.address.state}` : ''}{customer.address.postal_code ? `, ${customer.address.postal_code}` : ''}{customer.address.country ? `, ${customer.address.country}` : ''}
+                  </dd>
+                </div>
+              )}
               <div>
                 <dt className="text-sm font-medium text-gray-500">Created</dt>
                 <dd className="mt-1 text-sm text-gray-900">
@@ -250,6 +259,45 @@ export default function CustomerDetail() {
                             {method.type === 'card' && `Expires ${method.card.exp_month}/${method.card.exp_year}`}
                           </p>
                         </div>
+                        <div className="ml-auto flex items-center gap-2">
+                          {method.is_default ? (
+                            <span className="text-xs px-2 py-1 rounded bg-green-100 text-green-800">Default</span>
+                          ) : (
+                            <button
+                              onClick={async () => {
+                                try {
+                                  const updated = await paymentMethodApi.setDefault(customerId, method.id);
+                                  // update local state: mark only this method default
+                                  setPaymentMethods((prev) => prev.map((m) => ({ ...m, is_default: m.id === method.id })));
+                                  alert('Marked as default');
+                                } catch (err: any) {
+                                  console.error('Failed to set default', err);
+                                  alert(err?.response?.data?.detail || 'Failed to set default');
+                                }
+                              }}
+                              className="text-xs px-2 py-1 rounded border bg-white hover:bg-gray-50 text-indigo-600"
+                            >
+                              Set default
+                            </button>
+                          )}
+
+                          <button
+                            onClick={async () => {
+                              if (!confirm('Are you sure you want to delete this payment method?')) return;
+                              try {
+                                await paymentMethodApi.delete(customerId, method.id);
+                                setPaymentMethods((prev) => prev.filter((m) => m.id !== method.id));
+                                alert('Payment method deleted');
+                              } catch (err: any) {
+                                console.error('Failed to delete', err);
+                                alert(err?.response?.data?.detail || 'Failed to delete payment method');
+                              }
+                            }}
+                            className="text-xs px-2 py-1 rounded border bg-white hover:bg-gray-50 text-red-600"
+                          >
+                            Delete
+                          </button>
+                        </div>
                       </div>
                     </li>
                   ))}
@@ -278,7 +326,10 @@ export default function CustomerDetail() {
                 <ul className="divide-y divide-gray-200">
                   {subscriptions.map((subscription) => (
                     <li key={subscription.id} className="py-4">
-                      <div className="flex justify-between items-center">
+                      <Link
+                        href={`/subscriptions/${subscription.id}`}
+                        className="flex justify-between items-center hover:bg-gray-50 p-3 rounded-md"
+                      >
                         <div>
                           <p className="text-sm font-medium text-gray-900">
                             {subscription.plan_name}
@@ -299,7 +350,7 @@ export default function CustomerDetail() {
                             Renews {format(new Date(subscription.current_period_end), 'MMM d, yyyy')}
                           </p>
                         </div>
-                      </div>
+                      </Link>
                     </li>
                   ))}
                 </ul>
@@ -309,7 +360,7 @@ export default function CustomerDetail() {
             {/* Create Subscription Form */}
             <div className="bg-gray-50 p-4 rounded-md border border-gray-200">
               <h3 className="text-md font-medium text-gray-900 mb-4">Create Subscription</h3>
-              <SubscriptionForm customerId={customerId} onSuccess={handleSubscriptionCreated} />
+              <SubscriptionForm customerId={customerId} onSuccess={handleSubscriptionCreated} onError={setError} />
             </div>
           </div>
         )}
@@ -322,7 +373,12 @@ export default function CustomerDetail() {
             {/* Payment Form */}
             <div className="bg-gray-50 p-4 rounded-md border border-gray-200">
               <h3 className="text-md font-medium text-gray-900 mb-4">Process Payment</h3>
-              <OneTimePaymentForm customerId={customerId} onSuccess={handlePaymentProcessed} />
+              <OneTimePaymentForm
+                customerId={customerId}
+                paymentMethods={paymentMethods}
+                onSuccess={handlePaymentProcessed}
+                onError={setError}
+              />
             </div>
           </div>
         )}

@@ -19,6 +19,12 @@ export const customerApi = {
     const response = await apiClient.post('/customers', data);
     return response.data;
   }
+  ,
+  // Update an existing customer
+  update: async (id: string, data: any) => {
+    const response = await apiClient.patch(`/customers/${id}`, data);
+    return response.data;
+  }
 };
 
 // Payment Methods API methods
@@ -38,6 +44,18 @@ export const paymentMethodApi = {
   // Delete a payment method
   delete: async (customerId: string, paymentMethodId: string) => {
     const response = await apiClient.delete(`/customers/${customerId}/payment-methods/${paymentMethodId}`);
+    return response.data;
+  }
+  ,
+  // Update a stored payment method
+  update: async (customerId: string, paymentMethodId: string, data: any) => {
+    const response = await apiClient.patch(`/customers/${customerId}/payment-methods/${paymentMethodId}`, data);
+    return response.data;
+  },
+
+  // Mark a saved payment method as default for the customer
+  setDefault: async (customerId: string, paymentMethodId: string) => {
+    const response = await apiClient.post(`/customers/${customerId}/payment-methods/${paymentMethodId}/default`);
     return response.data;
   }
 };
@@ -83,11 +101,27 @@ export const subscriptionApi = {
     return response.data;
   },
 
+  // Get a subscription by id
+  getById: async (subscriptionId: string) => {
+    const response = await apiClient.get(`/subscriptions/${subscriptionId}`);
+    return response.data;
+  },
+
   // Cancel a subscription
   cancel: async (subscriptionId: string) => {
     const response = await apiClient.post(`/subscriptions/${subscriptionId}/cancel`);
     return response.data;
   }
+};
+
+// Payment method helper for SetupIntent flows
+export const paymentSetupApi = {
+  // Create a SetupIntent for a customer (returns client_secret and id)
+  createSetupIntent: async (customerId: string, options?: { usage?: string }) => {
+    const qs = options?.usage ? `?usage=${encodeURIComponent(options.usage)}` : '';
+    const response = await apiClient.post(`/customers/${customerId}/payment-methods/setup-intent${qs}`);
+    return response.data;
+  },
 };
 
 // Products and Plans API methods

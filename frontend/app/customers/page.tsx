@@ -59,7 +59,7 @@ export default function Customers() {
             <CardDescription>Add a new customer to your database</CardDescription>
           </CardHeader>
           <CardContent>
-            <CustomerForm onSuccess={handleCustomerCreated} />
+            <CustomerForm onSuccess={handleCustomerCreated} onError={setError} />
           </CardContent>
         </Card>
       )}
@@ -101,6 +101,11 @@ export default function Customers() {
                       <p className="text-sm text-muted-foreground">
                         {customer.name || 'No name provided'}
                       </p>
+                      {customer.address && (
+                        <p className="text-xs text-muted-foreground mt-1">
+                          {customer.address.line1 || ''} {customer.address.city ? `· ${customer.address.city}` : ''} {customer.address.country ? `· ${customer.address.country}` : ''}
+                        </p>
+                      )}
                     </div>
                     <div className="text-right">
                       <p className="text-sm font-medium">

@@ -1,6 +1,6 @@
 fastapi>=0.103.0
 uvicorn>=0.23.0
-fastapi-payments>=0.1.0
+-e ../../fastapi-payments
 # -e ./fastapi-payments
 python-dotenv>=1.0.0
 sqlalchemy>=2.0.0

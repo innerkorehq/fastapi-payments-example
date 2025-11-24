@@ -18,6 +18,7 @@ function NewSubscriptionContent() {
   const [customers, setCustomers] = useState<any[]>([]);
   const [selectedCustomerId, setSelectedCustomerId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   
   useEffect(() => {
     const fetchCustomers = async () => {
@@ -114,6 +115,7 @@ function NewSubscriptionContent() {
               <SubscriptionForm 
                 customerId={selectedCustomerId} 
                 onSuccess={handleSubscriptionCreated} 
+                onError={setError}
               />
             </div>
           )}
