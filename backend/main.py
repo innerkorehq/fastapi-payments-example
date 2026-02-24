@@ -6,7 +6,9 @@ ensure_memory_broker_support()
 from datetime import datetime
 from typing import Dict, Any, List, Optional
 
-from fastapi import FastAPI, Depends, HTTPException, Query
+import logging
+from fastapi import FastAPI, Depends, HTTPException, Query, Request
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 # Fix the import - routes might be in a different location
@@ -18,15 +20,19 @@ from fastapi_payments.api.dependencies import (
 )
 from fastapi_payments.config.config_schema import PaymentConfig
 from fastapi_payments.services.payment_service import PaymentService
+from fastapi_payments.db.repositories.subscription_repository import SubscriptionRepository
+from fastapi_payments.db.repositories.payment_repository import PaymentRepository
 
 from config import get_payment_config
 from schemas import (
-    CustomerCreate, CustomerResponse, 
+    CustomerCreate, CustomerResponse,
     PaymentMethodCreate, PaymentMethodResponse,
     PaymentCreate, PaymentResponse,
     ProductCreate, ProductResponse,
     PlanCreate, PlanResponse,
-    SubscriptionCreate, SubscriptionResponse
+    SubscriptionCreate, SubscriptionResponse,
+    ProviderLinkResponse,
+    SITransactionRequest, PreDebitNotifyRequest,
 )
 
 from schemas import CustomerUpdate
@@ -38,6 +44,8 @@ app = FastAPI(
     description="API for payment processing with FastAPI Payments",
     version="0.1.0",
 )
+
+logger = logging.getLogger(__name__)
 
 # Add CORS middleware
 app.add_middleware(
@@ -53,10 +61,53 @@ payments_config = PaymentConfig(**get_payment_config())
 payments = FastAPIPayments(payments_config)
 initialize_dependencies(payments_config)
 
+PROVIDER_CAPABILITIES = {
+    "stripe": {
+        "display_name": "Stripe",
+        "supports_payment_methods": True,
+        "supports_hosted_payments": False,
+    },
+    "payu": {
+        "display_name": "PayU",
+        "supports_payment_methods": False,
+        "supports_hosted_payments": True,
+    },
+    "cashfree": {
+        "display_name": "Cashfree",
+        "supports_payment_methods": False,
+        "supports_hosted_payments": True,
+    },
+    "razorpay": {
+        "display_name": "Razorpay",
+        "supports_payment_methods": False,
+        # Razorpay uses Checkout JS (embedded modal) rather than a full-page redirect.
+        # The frontend receives checkout_config in the subscription/payment response
+        # and opens the modal directly \u2014 no redirect needed.
+        "supports_hosted_payments": False,
+        "supports_checkout_js": True,
+    },
+}
+
+
+def _provider_catalog() -> Dict[str, Any]:
+    providers = []
+    for name in payments_config.providers.keys():
+        metadata = PROVIDER_CAPABILITIES.get(name, {})
+        providers.append(
+            {
+                "name": name,
+                "display_name": metadata.get("display_name", name.title()),
+                "supports_payment_methods": metadata.get("supports_payment_methods", False),
+                "supports_hosted_payments": metadata.get("supports_hosted_payments", False),
+                "is_default": name == payments_config.default_provider,
+            }
+        )
+
+    return {"default_provider": payments_config.default_provider, "providers": providers}
+
 # Include payment routes
 app.include_router(
     payment_routes.router,
-    prefix="/api/payments",
     tags=["payments"]
 )
 
@@ -68,6 +119,7 @@ def _ensure_timestamp(value: Optional[str]) -> str:
 
 
 def _customer_payload(customer: Dict[str, Any]) -> Dict[str, Any]:
+    provider_links = customer.get("provider_customers") or []
     return {
         "id": customer["id"],
         "email": customer.get("email"),
@@ -79,6 +131,15 @@ def _customer_payload(customer: Dict[str, Any]) -> Dict[str, Any]:
             or (customer.get("meta_info") or {}).get("address")
             or (customer.get("metadata") or {}).get("address")
         ),
+        "provider_customer_id": customer.get("provider_customer_id"),
+        "provider_customers": [
+            {
+                "provider": link.get("provider"),
+                "provider_customer_id": link.get("provider_customer_id"),
+            }
+            for link in provider_links
+            if link
+        ],
     }
 
 
@@ -89,23 +150,27 @@ def _payment_method_payload(method: Dict[str, Any]) -> Dict[str, Any]:
         "card": method.get("card"),
         "created_at": _ensure_timestamp(method.get("created_at")),
         "mandate_id": method.get("mandate_id"),
+        "provider": method.get("provider"),
+        "is_default": method.get("is_default", False),
     }
 
 
 def _product_payload(product: Dict[str, Any]) -> Dict[str, Any]:
-    metadata = product.get("meta_info") or product.get("metadata") or {}
+    meta_info = product.get("meta_info") or product.get("metadata") or {}
     return {
         "id": product["id"],
         "name": product.get("name"),
         "description": product.get("description"),
         "active": product.get("active", True),
         "created_at": _ensure_timestamp(product.get("created_at")),
-        "metadata": metadata,
+        "meta_info": meta_info,
+        "provider_product_id": product.get("provider_product_id"),
+        "provider": product.get("provider"),
     }
 
 
 def _plan_payload(plan: Dict[str, Any]) -> Dict[str, Any]:
-    metadata = plan.get("meta_info") or plan.get("metadata") or {}
+    meta_info = plan.get("meta_info") or plan.get("metadata") or {}
     return {
         "id": plan["id"],
         "product_id": plan.get("product_id"),
@@ -117,7 +182,7 @@ def _plan_payload(plan: Dict[str, Any]) -> Dict[str, Any]:
         "billing_interval": plan.get("billing_interval") or "",
         "billing_interval_count": plan.get("billing_interval_count") or 1,
         "created_at": _ensure_timestamp(plan.get("created_at")),
-        "metadata": metadata,
+        "meta_info": meta_info,
     }
 
 
@@ -128,6 +193,33 @@ def _subscription_payload(subscription: Dict[str, Any]) -> Dict[str, Any]:
         or subscription.get("metadata")
         or {}
     )
+    
+    # Extract redirect info from various providers
+    redirect_info = metadata.get("redirect")
+    redirect_url = None
+    if redirect_info:
+        redirect_url = redirect_info.get("action_url")
+    
+    # Razorpay: prefer Checkout JS over the hosted short_url redirect.
+    # checkout_config is bubbled up to the top level for easy front-end access.
+    checkout_config = metadata.get("checkout_config")
+
+    # Only fall back to short_url redirect when there is no checkout_config
+    # (i.e. Razorpay Checkout JS is not available).
+    if not checkout_config:
+        if not redirect_url and metadata.get("short_url"):
+            redirect_url = metadata.get("short_url")
+        if not redirect_url and metadata.get("auth_link"):
+            redirect_url = metadata.get("auth_link")
+
+    mandate_token = metadata.get("mandate_token") or subscription.get("provider_subscription_id", "")
+
+    # Determine if mandate token should be returned (provider-specific prefixes)
+    should_show_mandate = (
+        mandate_token.startswith("payu") or
+        mandate_token.startswith("sub_")  # Razorpay subscription IDs start with sub_
+    )
+
     return {
         "id": subscription["id"],
         "customer_id": subscription.get("customer_id"),
@@ -138,7 +230,10 @@ def _subscription_payload(subscription: Dict[str, Any]) -> Dict[str, Any]:
         "current_period_end": subscription.get("current_period_end"),
         "cancel_at_period_end": subscription.get("cancel_at_period_end", False),
         "created_at": _ensure_timestamp(subscription.get("created_at")),
-        "metadata": metadata,
+        "meta_info": metadata,
+        "checkout_config": checkout_config,  # Razorpay Checkout JS options dict
+        "redirect_url": redirect_url,
+        "mandate_token": mandate_token if should_show_mandate else None,
     }
 
 
@@ -153,7 +248,8 @@ def _payment_payload(payment: Dict[str, Any]) -> Dict[str, Any]:
         "customer_id": payment.get("customer_id"),
         "payment_method_id": payment.get("payment_method"),
         "created_at": _ensure_timestamp(payment.get("created_at")),
-        "metadata": metadata,
+        "meta_info": metadata,
+        "checkout_config": metadata.get("checkout_config"),  # Razorpay Checkout JS options dict
     }
 
 
@@ -168,6 +264,23 @@ async def root():
 async def health_check():
     """Health check endpoint."""
     return {"status": "healthy"}
+
+
+@app.get("/providers")
+async def list_providers():
+    """Return configured payment providers and their capabilities."""
+    return _provider_catalog()
+
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    """Global handler to log unexpected exceptions with full trace and return
+    a safe 500 to clients while avoiding leaking implementation details.
+    """
+    logger.exception("Unhandled exception during request %s %s", request.method, request.url)
+    if isinstance(exc, HTTPException):
+        return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+    return JSONResponse(status_code=500, content={"detail": "Internal server error"})
 
 
 # Customer routes
@@ -186,6 +299,8 @@ async def list_customers(
         )
         return [_customer_payload(customer) for customer in customers]
     except Exception as exc:
+        # Log the full traceback to help debug unexpected 500s
+        logger.exception("Unexpected error listing payment methods for %s (provider=%s)", customer_id, provider)
         raise HTTPException(status_code=500, detail=str(exc))
 
 
@@ -197,11 +312,20 @@ async def create_customer(
 ):
     """Create a new customer via the payment service."""
     try:
+        # Extract provider from meta_info if provided
+        provider = None
+        if customer.meta_info:
+            provider = customer.meta_info.get("provider")
+            logger.info(f"Customer creation: extracted provider={provider} from meta_info")
+        
+        logger.info(f"Customer creation: final provider={provider}")
+        
         created = await payment_service.create_customer(
             email=customer.email,
             name=customer.name,
-            meta_info=customer.metadata,
+            meta_info=customer.meta_info,
             address=customer.address,
+            provider=provider,
         )
         return _customer_payload(created)
     except ValueError as exc:
@@ -252,6 +376,26 @@ async def update_customer(
         raise HTTPException(status_code=500, detail=str(exc))
 
 
+@app.post(
+    "/customers/{customer_id}/providers/{provider}",
+    response_model=ProviderLinkResponse,
+)
+async def link_customer_provider(
+    customer_id: str,
+    provider: str,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+    payment_service: PaymentService = Depends(get_payment_service_with_db),
+):
+    """Register a customer with an additional provider."""
+    try:
+        result = await payment_service.ensure_provider_customer(customer_id, provider)
+        return result
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
 @app.get(
     "/customers/{customer_id}/payment-methods",
     response_model=List[PaymentMethodResponse],
@@ -286,9 +430,12 @@ async def create_payment_method(
 ):
     """Attach a new payment method to a customer."""
     try:
+        payload = payment_method.model_dump(exclude_none=True)
+        provider = payload.pop("provider", None)
         created = await payment_service.create_payment_method(
             customer_id=customer_id,
-            payment_details=payment_method.model_dump(exclude_none=True),
+            payment_details=payload,
+            provider=provider,
         )
         return _payment_method_payload(created)
     except ValueError as exc:
@@ -300,6 +447,7 @@ async def create_payment_method(
 async def create_setup_intent(
     customer_id: str,
     usage: Optional[str] = Query(None, description="Optional usage for the setup intent (e.g., 'off_session')."),
+    provider: Optional[str] = Query(None, description="Provider to create the setup intent for"),
     current_user: Dict[str, Any] = Depends(get_current_user),
     payment_service: PaymentService = Depends(get_payment_service_with_db),
 ):
@@ -308,7 +456,7 @@ async def create_setup_intent(
     Returns a JSON object with `id` and `client_secret`.
     """
     try:
-        result = await payment_service.create_setup_intent(customer_id, usage=usage)
+        result = await payment_service.create_setup_intent(customer_id, provider=provider, usage=usage)
         return result
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
@@ -354,6 +502,7 @@ async def create_payment(
             mandate_id=getattr(payment, 'mandate_id', None),
             description=payment.description,
             meta_info=payment.metadata,
+            provider=payment.provider,
         )
         return _payment_payload(processed)
     except ValueError as exc:
@@ -386,10 +535,21 @@ async def create_product(
 ):
     """Create a new product across provider + local DB."""
     try:
+        logger.info("=== CREATE PRODUCT ENDPOINT CALLED ===")
+        logger.info(f"Raw product data: {product.dict()}")
+        # Extract provider from meta_info if provided
+        provider = None
+        if product.meta_info:
+            provider = product.meta_info.get("provider")
+            logger.info(f"Extracted provider from meta_info: {provider}")
+        
+        logger.info(f"Final provider to use: {provider}")
+        
         created = await payment_service.create_product(
             name=product.name,
             description=product.description,
-            meta_info=product.metadata,
+            meta_info=product.meta_info,
+            provider=provider,
         )
         return _product_payload(created)
     except ValueError as exc:
@@ -426,6 +586,11 @@ async def create_plan(
 ):
     """Create pricing for an existing product."""
     try:
+        # Extract provider from metadata if provided
+        provider = None
+        if plan.meta_info:
+            provider = plan.meta_info.get("provider")
+        
         created = await payment_service.create_plan(
             product_id=product_id,
             name=plan.name,
@@ -435,7 +600,8 @@ async def create_plan(
             currency=plan.currency,
             billing_interval=plan.billing_interval,
             billing_interval_count=plan.billing_interval_count,
-            meta_info=plan.metadata,
+            meta_info=plan.meta_info,
+            provider=provider,
         )
         return _plan_payload(created)
     except ValueError as exc:
@@ -493,14 +659,31 @@ async def create_subscription(
     payment_service: PaymentService = Depends(get_payment_service_with_db),
 ):
     """Create a subscription using an existing plan."""
+    print(f"[BACKEND] create_subscription endpoint called with provider={subscription.provider}")
+    print(f"[BACKEND] meta_info from request: {subscription.meta_info}")
+    
     try:
+        # Pass provider if specified, otherwise will use plan's default provider
+        meta_info = subscription.meta_info or {}
+        if subscription.provider:
+            meta_info["provider"] = subscription.provider
+        
+        print(f"[BACKEND] Calling payment_service.create_subscription with meta_info: {meta_info}")
+        
         created = await payment_service.create_subscription(
             customer_id=customer_id,
             plan_id=subscription.plan_id,
             quantity=subscription.quantity,
             trial_period_days=subscription.trial_period_days,
-            meta_info=subscription.metadata,
+            meta_info=meta_info,
         )
+        
+        print(f"[BACKEND] Received subscription response with meta_info keys: {list((created.get('meta_info') or {}).keys())}")
+        if created.get('meta_info', {}).get('redirect'):
+            print(f"[BACKEND] REDIRECT INFO PRESENT: {created['meta_info']['redirect'].get('action_url')}")
+        else:
+            print(f"[BACKEND] WARNING: NO REDIRECT INFO in response")
+        
         return _subscription_payload(created)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -544,6 +727,140 @@ async def get_subscription(
         raise HTTPException(status_code=404, detail="Subscription not found")
 
     return _subscription_payload(subscription)
+
+
+# ---------------------------------------------------------------------------
+# Razorpay-specific routes
+# ---------------------------------------------------------------------------
+from pydantic import BaseModel as _BaseModel
+
+
+class RazorpayVerifyPaymentRequest(_BaseModel):
+    """Payload from Razorpay Checkout JS handler after a successful payment."""
+
+    razorpay_payment_id: str
+    razorpay_order_id: Optional[str] = None           # present for one-time orders
+    razorpay_subscription_id: Optional[str] = None    # present for subscriptions
+    razorpay_signature: str
+    # Our internal DB IDs — used to mark the record as active/completed after verification.
+    subscription_id: Optional[str] = None             # internal DB subscription.id
+    payment_id: Optional[str] = None                  # internal DB payment.id
+
+
+@app.post("/razorpay/verify-payment")
+async def razorpay_verify_payment(
+    request: RazorpayVerifyPaymentRequest,
+    payment_service: PaymentService = Depends(get_payment_service_with_db),
+):
+    """Verify the Razorpay payment signature that the frontend sends after checkout.
+
+    Call this from the Razorpay Checkout JS ``handler`` callback.
+    Returns ``{\"verified\": true}`` on success or raises HTTP 400 on failure.
+    """
+    try:
+        provider = payment_service.get_provider("razorpay")
+        provider.verify_payment_signature(
+            razorpay_payment_id=request.razorpay_payment_id,
+            razorpay_order_id=request.razorpay_order_id,
+            razorpay_subscription_id=request.razorpay_subscription_id,
+            razorpay_signature=request.razorpay_signature,
+        )
+
+        # ── Mark subscription active ────────────────────────────────────────
+        if request.subscription_id:
+            sub_repo = SubscriptionRepository(payment_service.db_session)
+            updated = await sub_repo.update(request.subscription_id, status="active")
+            if updated:
+                sub_dict = {
+                    "id": updated.id,
+                    "customer_id": updated.customer_id,
+                    "plan_id": updated.plan_id,
+                    "status": updated.status,
+                    "quantity": updated.quantity or 1,
+                    "current_period_start": updated.current_period_start,
+                    "current_period_end": updated.current_period_end,
+                    "cancel_at_period_end": updated.cancel_at_period_end or False,
+                    "created_at": updated.created_at,
+                    "meta_info": updated.meta_info,
+                }
+                return {"verified": True, "subscription": _subscription_payload(sub_dict)}
+
+        # ── Mark payment completed ──────────────────────────────────────────
+        if request.payment_id:
+            pay_repo = PaymentRepository(payment_service.db_session)
+            updated_pay = await pay_repo.update(request.payment_id, status="COMPLETED")
+            if updated_pay:
+                pay_dict = {
+                    "id": updated_pay.id,
+                    "customer_id": updated_pay.customer_id,
+                    "amount": updated_pay.amount,
+                    "currency": updated_pay.currency,
+                    "status": updated_pay.status,
+                    "payment_method": updated_pay.payment_method,
+                    "created_at": updated_pay.created_at,
+                    "meta_info": updated_pay.meta_info,
+                }
+                return {"verified": True, "payment": _payment_payload(pay_dict)}
+
+        return {"verified": True}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        logger.exception("Razorpay signature verification error")
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+# PayU SI-specific routes
+from schemas import SITransactionRequest, PreDebitNotifyRequest
+
+
+@app.post("/payu/si-transaction")
+async def payu_si_transaction(
+    request: SITransactionRequest,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+    payment_service: PaymentService = Depends(get_payment_service_with_db),
+):
+    """Execute a PayU SI (Standing Instruction) recurring payment transaction."""
+    try:
+        provider = payment_service.get_provider("payu")
+        if not hasattr(provider, "si_transaction"):
+            raise HTTPException(status_code=400, detail="SI transactions not supported by provider")
+        
+        result = await provider.si_transaction(
+            mandate_token=request.mandate_token,
+            amount=request.amount,
+            txnid=request.txnid,
+        )
+        return result
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.post("/payu/pre-debit-notify")
+async def payu_pre_debit_notify(
+    request: PreDebitNotifyRequest,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+    payment_service: PaymentService = Depends(get_payment_service_with_db),
+):
+    """Send PayU pre-debit notification to customer (RBI compliance)."""
+    try:
+        provider = payment_service.get_provider("payu")
+        if not hasattr(provider, "pre_debit_notify"):
+            raise HTTPException(status_code=400, detail="Pre-debit notifications not supported by provider")
+        
+        result = await provider.pre_debit_notify(
+            mandate_token=request.mandate_token,
+            amount=request.amount,
+            debit_date=request.debit_date,
+        )
+        return result
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
 
 if __name__ == "__main__":
     import uvicorn

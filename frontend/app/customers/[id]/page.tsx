@@ -9,7 +9,7 @@ import { format } from 'date-fns';
 import CreditCardForm from '../../../components/payments/CreditCardForm';
 import OneTimePaymentForm from '../../../components/payments/OneTimePaymentForm';
 import SubscriptionForm from '../../../components/subscriptions/SubscriptionForm';
-import { customerApi, paymentMethodApi, subscriptionApi } from '../../../lib/payment-api';
+import { customerApi, paymentMethodApi, subscriptionApi, providerApi, customerProviderApi } from '../../../lib/payment-api';
 
 // Load Stripe outside of render to avoid recreating it on each render
 const stripePromise = loadStripe(process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY || '');
@@ -25,6 +25,25 @@ export default function CustomerDetail() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState('overview');
+  const [providerCatalog, setProviderCatalog] = useState<{ default_provider?: string; providers?: any[] } | null>(null);
+  const [providersError, setProvidersError] = useState<string | null>(null);
+  const [linkingProvider, setLinkingProvider] = useState<string | null>(null);
+  const [linkProviderError, setLinkProviderError] = useState<string | null>(null);
+
+  const providerLinks = (customer?.provider_customers as any[]) || [];
+  const catalogProviders = providerCatalog?.providers || [];
+  const registeredProviderNames = new Set(
+    providerLinks.map((link) => link?.provider).filter(Boolean)
+  );
+  const activeProviders = catalogProviders.filter((provider) =>
+    registeredProviderNames.has(provider.name)
+  );
+  const inactiveProviders = catalogProviders.filter(
+    (provider) => !registeredProviderNames.has(provider.name)
+  );
+  const activeDefaultProviderName = activeProviders.find(
+    (provider) => provider.name === providerCatalog?.default_provider
+  )?.name;
   
   // Fetch customer data
   useEffect(() => {
@@ -54,6 +73,43 @@ export default function CustomerDetail() {
     
     fetchCustomerData();
   }, [customerId]);
+
+  useEffect(() => {
+    const loadProviders = async () => {
+      try {
+        const catalog = await providerApi.list();
+        setProviderCatalog(catalog);
+      } catch (err: any) {
+        const detail = err?.response?.data?.detail || err?.message || 'Failed to load providers';
+        setProvidersError(detail);
+      }
+    };
+
+    loadProviders();
+  }, []);
+
+  const handleLinkProvider = async (providerName: string) => {
+    setLinkProviderError(null);
+    setLinkingProvider(providerName);
+    try {
+      const link = await customerProviderApi.link(customerId, providerName);
+      setCustomer((prev: any) => {
+        if (!prev) return prev;
+        const existing = (prev.provider_customers || []).filter(
+          (pc: any) => pc.provider !== link.provider
+        );
+        return {
+          ...prev,
+          provider_customers: [...existing, link],
+        };
+      });
+    } catch (err: any) {
+      const detail = err?.response?.data?.detail || err?.message || 'Failed to enable provider';
+      setLinkProviderError(detail);
+    } finally {
+      setLinkingProvider(null);
+    }
+  };
   
   const handlePaymentMethodAdded = (paymentMethod: any) => {
     setPaymentMethods((prev) => [...prev, paymentMethod]);
@@ -227,6 +283,53 @@ export default function CustomerDetail() {
                 </div>
               </div>
             </div>
+
+            {providerCatalog && (
+              <div className="mt-8 border-t border-gray-200 pt-6">
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="text-lg font-medium text-gray-900">Payment Providers</h3>
+                  {providersError && (
+                    <span className="text-sm text-red-500">{providersError}</span>
+                  )}
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {activeProviders.length > 0 ? (
+                    activeProviders.map((provider) => (
+                      <span
+                        key={provider.name}
+                        className="px-3 py-1 text-xs font-medium rounded-full bg-green-100 text-green-800"
+                      >
+                        {provider.display_name || provider.name}
+                      </span>
+                    ))
+                  ) : (
+                    <p className="text-sm text-gray-600">No providers linked yet.</p>
+                  )}
+                </div>
+                {inactiveProviders.length > 0 && (
+                  <div className="mt-4 space-y-2">
+                    <p className="text-sm text-gray-700">
+                      Enable additional providers for this customer:
+                    </p>
+                    <div className="flex flex-wrap gap-2">
+                      {inactiveProviders.map((provider) => (
+                        <button
+                          key={provider.name}
+                          onClick={() => handleLinkProvider(provider.name)}
+                          disabled={linkingProvider === provider.name}
+                          className="px-3 py-1 text-sm rounded-md border border-indigo-200 text-indigo-700 hover:bg-indigo-50 disabled:opacity-50"
+                        >
+                          {linkingProvider === provider.name ? 'Enabling...' : `Enable ${provider.display_name || provider.name}`}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {linkProviderError && (
+                  <p className="text-sm text-red-500 mt-2">{linkProviderError}</p>
+                )}
+              </div>
+            )}
           </div>
         )}
         
@@ -245,7 +348,12 @@ export default function CustomerDetail() {
                         <div className="mr-4">
                           {method.type === 'card' && (
                             <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
-                              {method.card.brand.toUpperCase()}
+                              {(method.card?.brand || 'CARD').toUpperCase()}
+                            </span>
+                          )}
+                          {method.provider && (
+                            <span className="ml-2 inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-600">
+                              {method.provider}
                             </span>
                           )}
                         </div>
@@ -309,8 +417,21 @@ export default function CustomerDetail() {
             <div className="bg-gray-50 p-4 rounded-md border border-gray-200">
               <h3 className="text-md font-medium text-gray-900 mb-4">Add Payment Method</h3>
               <Elements stripe={stripePromise}>
-                <CreditCardForm customerId={customerId} onSuccess={handlePaymentMethodAdded} />
+                <CreditCardForm
+                  customerId={customerId}
+                  providers={activeProviders}
+                  defaultProvider={activeDefaultProviderName}
+                  onSuccess={handlePaymentMethodAdded}
+                />
               </Elements>
+              {providersError && (
+                <p className="text-sm text-red-500 mt-2">{providersError}</p>
+              )}
+              {activeProviders.length === 0 && (
+                <p className="text-sm text-gray-600 mt-2">
+                  Link a provider above to start saving payment methods for this customer.
+                </p>
+              )}
             </div>
           </div>
         )}
@@ -360,7 +481,21 @@ export default function CustomerDetail() {
             {/* Create Subscription Form */}
             <div className="bg-gray-50 p-4 rounded-md border border-gray-200">
               <h3 className="text-md font-medium text-gray-900 mb-4">Create Subscription</h3>
-              <SubscriptionForm customerId={customerId} onSuccess={handleSubscriptionCreated} onError={setError} />
+              <SubscriptionForm 
+                customerId={customerId} 
+                providers={activeProviders}
+                defaultProvider={activeDefaultProviderName}
+                onSuccess={handleSubscriptionCreated} 
+                onError={setError} 
+              />
+              {providersError && (
+                <p className="text-sm text-red-500 mt-2">{providersError}</p>
+              )}
+              {activeProviders.length === 0 && (
+                <p className="text-sm text-gray-600 mt-2">
+                  Enable a provider to create subscriptions for this customer.
+                </p>
+              )}
             </div>
           </div>
         )}
@@ -376,9 +511,20 @@ export default function CustomerDetail() {
               <OneTimePaymentForm
                 customerId={customerId}
                 paymentMethods={paymentMethods}
+                providers={activeProviders}
+                defaultProvider={activeDefaultProviderName}
+                customer={customer}
                 onSuccess={handlePaymentProcessed}
                 onError={setError}
               />
+              {providersError && (
+                <p className="text-sm text-red-500 mt-2">{providersError}</p>
+              )}
+              {activeProviders.length === 0 && (
+                <p className="text-sm text-gray-600 mt-2">
+                  Enable a provider to process payments for this customer.
+                </p>
+              )}
             </div>
           </div>
         )}

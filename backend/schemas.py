@@ -9,14 +9,19 @@ class CustomerCreate(BaseModel):
     email: str
     name: Optional[str] = None
     address: Optional[Dict[str, Any]] = None
-    metadata: Optional[Dict[str, Any]] = None
+    meta_info: Optional[Dict[str, Any]] = None
 
 
 class CustomerUpdate(BaseModel):
     email: Optional[str] = None
     name: Optional[str] = None
     address: Optional[Dict[str, Any]] = None
-    metadata: Optional[Dict[str, Any]] = None
+    meta_info: Optional[Dict[str, Any]] = None
+
+
+class ProviderCustomer(BaseModel):
+    provider: str
+    provider_customer_id: str
 
 
 class CustomerResponse(BaseModel):
@@ -27,9 +32,15 @@ class CustomerResponse(BaseModel):
     name: Optional[str] = None
     created_at: str
     updated_at: Optional[str] = None
-    metadata: Optional[Dict[str, Any]] = None
+    meta_info: Optional[Dict[str, Any]] = None
     address: Optional[Dict[str, Any]] = None
     provider_customer_id: Optional[str] = None
+    provider_customers: Optional[List[ProviderCustomer]] = None
+
+
+class ProviderLinkResponse(BaseModel):
+    provider: str
+    provider_customer_id: str
 
 
 # Payment method schemas
@@ -50,6 +61,7 @@ class PaymentMethodCreate(BaseModel):
     setup_intent_id: Optional[str] = None
     mandate_id: Optional[str] = None
     set_default: bool = False
+    provider: Optional[str] = None
 
 
 class PaymentMethodResponse(BaseModel):
@@ -69,7 +81,7 @@ class ProductCreate(BaseModel):
     """Schema for product creation."""
     name: str
     description: Optional[str] = None
-    metadata: Optional[Dict[str, Any]] = None
+    meta_info: Optional[Dict[str, Any]] = None
 
 
 class ProductResponse(BaseModel):
@@ -80,7 +92,7 @@ class ProductResponse(BaseModel):
     description: Optional[str] = None
     active: bool
     created_at: str
-    metadata: Optional[Dict[str, Any]] = None
+    meta_info: Optional[Dict[str, Any]] = None
     provider_product_id: Optional[str] = None
     provider: Optional[str] = None
 
@@ -95,7 +107,7 @@ class PlanCreate(BaseModel):
     currency: str = "USD"
     billing_interval: str  # day, week, month, year
     billing_interval_count: int = 1
-    metadata: Optional[Dict[str, Any]] = None
+    meta_info: Optional[Dict[str, Any]] = None
 
 
 class PlanResponse(BaseModel):
@@ -111,7 +123,7 @@ class PlanResponse(BaseModel):
     billing_interval: Optional[str] = None
     billing_interval_count: Optional[int] = None
     created_at: str
-    metadata: Optional[Dict[str, Any]] = None
+    meta_info: Optional[Dict[str, Any]] = None
     provider: Optional[str] = None
     provider_price_id: Optional[str] = None
 
@@ -122,7 +134,11 @@ class SubscriptionCreate(BaseModel):
     plan_id: str
     quantity: int = 1
     trial_period_days: Optional[int] = None
-    metadata: Optional[Dict[str, Any]] = None
+    meta_info: Optional[Dict[str, Any]] = None
+    provider: Optional[str] = None  # Specify provider for subscription
+    
+    # PayU-specific SI fields (passed in metadata['payu'] typically)
+    # These are documented here for reference but passed via metadata
 
 
 class SubscriptionResponse(BaseModel):
@@ -137,9 +153,12 @@ class SubscriptionResponse(BaseModel):
     current_period_end: Optional[str] = None
     cancel_at_period_end: bool = False
     created_at: str
-    metadata: Optional[Dict[str, Any]] = None
+    meta_info: Optional[Dict[str, Any]] = None
     provider_subscription_id: Optional[str] = None
     provider: Optional[str] = None
+    checkout_config: Optional[Dict[str, Any]] = None  # Razorpay Checkout JS options dict
+    redirect_url: Optional[str] = None  # For PayU hosted checkout redirect
+    mandate_token: Optional[str] = None  # For PayU SI mandate token
 
 
 # Payment schemas
@@ -151,7 +170,8 @@ class PaymentCreate(BaseModel):
     mandate_id: Optional[str] = None
     description: Optional[str] = None
     customer_id: Optional[str] = None
-    metadata: Optional[Dict[str, Any]] = None
+    meta_info: Optional[Dict[str, Any]] = None
+    provider: Optional[str] = None
 
 
 class PaymentResponse(BaseModel):
@@ -165,10 +185,26 @@ class PaymentResponse(BaseModel):
     customer_id: Optional[str] = None
     payment_method_id: Optional[str] = None
     created_at: str
-    metadata: Optional[Dict[str, Any]] = None
+    meta_info: Optional[Dict[str, Any]] = None
     provider: Optional[str] = None
     provider_payment_id: Optional[str] = None
     refunded_amount: Optional[float] = None
+    checkout_config: Optional[Dict[str, Any]] = None  # Razorpay Checkout JS options dict
+
+
+# PayU SI (Standing Instruction) schemas
+class SITransactionRequest(BaseModel):
+    """Schema for PayU SI transaction request."""
+    mandate_token: str
+    amount: float
+    txnid: Optional[str] = None
+
+
+class PreDebitNotifyRequest(BaseModel):
+    """Schema for PayU pre-debit notification."""
+    mandate_token: str
+    amount: float
+    debit_date: str  # Format: dd-MM-yyyy
 
 
 # Webhook schemas

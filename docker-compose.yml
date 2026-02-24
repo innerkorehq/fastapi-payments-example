@@ -11,13 +11,28 @@ services:
       - DATABASE_URL=sqlite+aiosqlite:///./payments.db
       - STRIPE_API_KEY=${STRIPE_API_KEY:-sk_test_your_test_key}
       - STRIPE_WEBHOOK_SECRET=${STRIPE_WEBHOOK_SECRET:-whsec_your_webhook_secret}
+      - PAYU_API_KEY=${PAYU_API_KEY:-your_payu_key}
+      - PAYU_API_SECRET=${PAYU_API_SECRET:-your_payu_secret}
+      - PAYU_SANDBOX_MODE=${PAYU_SANDBOX_MODE:-true}
+      - CASHFREE_CLIENT_ID=${CASHFREE_CLIENT_ID:-your_cashfree_client_id}
+      - CASHFREE_CLIENT_SECRET=${CASHFREE_CLIENT_SECRET:-your_cashfree_client_secret}
+      - CASHFREE_SANDBOX_MODE=${CASHFREE_SANDBOX_MODE:-true}
+      - CASHFREE_COLLECTION_MODE=${CASHFREE_COLLECTION_MODE:-india}
+      - RAZORPAY_KEY_ID=${RAZORPAY_KEY_ID:-your_razorpay_key_id}
+      - RAZORPAY_KEY_SECRET=${RAZORPAY_KEY_SECRET:-your_razorpay_key_secret}
+      - RAZORPAY_WEBHOOK_SECRET=${RAZORPAY_WEBHOOK_SECRET:-your_razorpay_webhook_secret}
+      - RAZORPAY_SANDBOX_MODE=${RAZORPAY_SANDBOX_MODE:-true}
       - MESSAGE_BROKER_TYPE=memory
       - PAYMENT_SANDBOX_MODE=true
       - DEBUG=true
+      - FRONTEND_URL=http://localhost:3000
+      - BACKEND_URL=http://localhost:8000
     volumes:
       - ./backend:/app
       # Exclude patches directory to prevent it from being overwritten by the volume mount
       - ./backend/patches:/app/patches
+      # Mount the fastapi-payments library source for live editing
+      - ../fastapi-payments/src/fastapi_payments:/fastapi-payments/src/fastapi_payments
     command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 
   frontend:

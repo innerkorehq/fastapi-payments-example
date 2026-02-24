@@ -27,11 +27,19 @@ export const customerApi = {
   }
 };
 
+export const customerProviderApi = {
+  link: async (customerId: string, provider: string) => {
+    const response = await apiClient.post(`/customers/${customerId}/providers/${provider}`);
+    return response.data;
+  },
+};
+
 // Payment Methods API methods
 export const paymentMethodApi = {
   // Get all payment methods for a customer
-  getAllForCustomer: async (customerId: string) => {
-    const response = await apiClient.get(`/customers/${customerId}/payment-methods`);
+  getAllForCustomer: async (customerId: string, options?: { provider?: string }) => {
+    const qs = options?.provider ? `?provider=${encodeURIComponent(options.provider)}` : '';
+    const response = await apiClient.get(`/customers/${customerId}/payment-methods${qs}`);
     return response.data;
   },
 
@@ -117,9 +125,55 @@ export const subscriptionApi = {
 // Payment method helper for SetupIntent flows
 export const paymentSetupApi = {
   // Create a SetupIntent for a customer (returns client_secret and id)
-  createSetupIntent: async (customerId: string, options?: { usage?: string }) => {
-    const qs = options?.usage ? `?usage=${encodeURIComponent(options.usage)}` : '';
+  createSetupIntent: async (customerId: string, options?: { usage?: string; provider?: string }) => {
+    const searchParams = new URLSearchParams();
+    if (options?.usage) searchParams.set('usage', options.usage);
+    if (options?.provider) searchParams.set('provider', options.provider);
+    const qs = searchParams.toString() ? `?${searchParams.toString()}` : '';
     const response = await apiClient.post(`/customers/${customerId}/payment-methods/setup-intent${qs}`);
+    return response.data;
+  },
+};
+
+export const providerApi = {
+  list: async () => {
+    const response = await apiClient.get('/providers');
+    return response.data;
+  },
+};
+
+// Razorpay-specific API methods
+export const razorpayApi = {
+  /**
+   * Verify the Razorpay payment signature on the backend.
+   *
+   * Call this from the Razorpay Checkout JS `handler` callback before
+   * crediting the payment in your UI.
+   *
+   * @param data  The object received from Razorpay Checkout JS handler.
+   */
+  verifyPayment: async (data: {
+    razorpay_payment_id: string;
+    razorpay_order_id?: string;
+    razorpay_subscription_id?: string;
+    razorpay_signature: string;
+    /** Internal DB subscription ID — backend uses this to mark it active */
+    subscription_id?: string;
+    /** Internal DB payment ID — backend uses this to mark it completed */
+    payment_id?: string;
+  }): Promise<{ verified: boolean; subscription?: any; payment?: any }> => {
+    const response = await apiClient.post('/razorpay/verify-payment', data);
+    return response.data;
+  },
+};
+
+export const syncApi = {
+  trigger: async (payload: any = {}) => {
+    const response = await apiClient.post('/sync', payload);
+    return response.data;
+  },
+  getJob: async (jobId: string) => {
+    const response = await apiClient.get(`/sync/${jobId}`);
     return response.data;
   },
 };

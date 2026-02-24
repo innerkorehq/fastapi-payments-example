@@ -1,11 +1,71 @@
 "use client";
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Users, CreditCard, Package, Repeat, ArrowRight } from 'lucide-react';
+import { Users, CreditCard, Package, Repeat, ArrowRight, RefreshCw } from 'lucide-react';
+import { syncApi } from '../lib/payment-api';
 
 export default function Home() {
+  const [syncJob, setSyncJob] = useState<any | null>(null);
+  const [syncError, setSyncError] = useState<string | null>(null);
+  const [isSyncing, setIsSyncing] = useState(false);
+
+  const isJobActive = !!syncJob && ['pending', 'running', 'in_progress'].includes((syncJob.status || '').toLowerCase());
+
+  const triggerSync = async () => {
+    setSyncError(null);
+    setIsSyncing(true);
+    try {
+      const job = await syncApi.trigger();
+      setSyncJob(job);
+    } catch (error: any) {
+      const detail = error?.response?.data?.detail || error?.prettyMessage || error?.message || 'Failed to start sync';
+      setSyncError(detail);
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!syncJob?.id) return;
+    const status = (syncJob.status || '').toLowerCase();
+    if (['completed', 'failed'].includes(status)) return;
+
+    const interval = setInterval(async () => {
+      try {
+        const updated = await syncApi.getJob(syncJob.id);
+        setSyncJob(updated);
+      } catch (error: any) {
+        console.error('Failed to poll sync job', error);
+        const detail = error?.response?.data?.detail || error?.prettyMessage || error?.message || 'Failed to fetch sync status';
+        setSyncError(detail);
+      }
+    }, 2000);
+
+    return () => clearInterval(interval);
+  }, [syncJob?.id, syncJob?.status]);
+
+  const renderSyncSummary = () => {
+    const summary = syncJob?.result?.summary;
+    if (!summary) return null;
+
+    return (
+      <ul className="mt-3 text-sm text-muted-foreground space-y-1">
+        {Object.entries(summary).map(([resource, stats]) => {
+          const item = stats as Record<string, number | string | undefined>;
+          return (
+            <li key={resource} className="flex justify-between">
+              <span className="capitalize">{resource}</span>
+              <span>
+                {item.synced ?? 0} synced · {item.updated ?? 0} updated
+              </span>
+            </li>
+          );
+        })}
+      </ul>
+    );
+  };
   const features = [
     {
       title: 'Customers',
@@ -59,6 +119,49 @@ export default function Home() {
             </a>
           </Button>
         </div>
+      </div>
+
+      <div className="max-w-4xl mx-auto w-full">
+        <Card className="shadow-sm">
+          <CardHeader className="space-y-1">
+            <CardTitle className="text-base flex items-center gap-2">
+              <RefreshCw className="h-4 w-4" /> Sync provider data
+            </CardTitle>
+            <CardDescription>
+              Kick off a background sync job to refresh local products, customers, plans, subscriptions, and payments from every configured provider.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+              <div>
+                <p className="text-sm text-muted-foreground">
+                  Status: {syncJob?.status ? syncJob.status : 'Idle'}
+                </p>
+                {syncJob?.updated_at && (
+                  <p className="text-xs text-muted-foreground">Updated at {new Date(syncJob.updated_at).toLocaleTimeString()}</p>
+                )}
+              </div>
+              <Button onClick={triggerSync} disabled={isSyncing || isJobActive} variant="default">
+                {isSyncing || isJobActive ? (
+                  <span className="flex items-center gap-2">
+                    <RefreshCw className="h-4 w-4 animate-spin" />
+                    Syncing...
+                  </span>
+                ) : (
+                  <span className="flex items-center gap-2">
+                    <RefreshCw className="h-4 w-4" />
+                    Start Sync
+                  </span>
+                )}
+              </Button>
+            </div>
+            {syncError && <p className="text-sm text-red-500">{syncError}</p>}
+            {syncJob?.result && renderSyncSummary()}
+            {syncJob && !syncJob.result && !isJobActive && (
+              <p className="text-sm text-muted-foreground">Waiting for provider responses...</p>
+            )}
+          </CardContent>
+        </Card>
       </div>
 
       <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-4">

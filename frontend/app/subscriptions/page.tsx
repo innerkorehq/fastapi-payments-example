@@ -140,7 +140,11 @@ export default function Subscriptions() {
                     <div className="flex items-center gap-2 text-sm text-muted-foreground">
                       <Calendar className="h-4 w-4" />
                       <span>
-                        {format(new Date(subscription.current_period_start), 'MMM d, yyyy')} - {format(new Date(subscription.current_period_end), 'MMM d, yyyy')}
+                        {subscription.current_period_start && subscription.current_period_end ? (
+                          `${format(new Date(subscription.current_period_start), 'MMM d, yyyy')} - ${format(new Date(subscription.current_period_end), 'MMM d, yyyy')}`
+                        ) : (
+                          'Pending activation'
+                        )}
                       </span>
                     </div>
                     <p className="text-sm">

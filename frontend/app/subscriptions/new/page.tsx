@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Label } from '@/components/ui/label';
-import { subscriptionApi, customerApi } from '../../../lib/payment-api';
+import { subscriptionApi, customerApi, providerApi } from '../../../lib/payment-api';
 import SubscriptionForm from '../../../components/subscriptions/SubscriptionForm';
 import { ArrowLeft, Users } from 'lucide-react';
 
@@ -19,6 +19,7 @@ function NewSubscriptionContent() {
   const [selectedCustomerId, setSelectedCustomerId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [providerCatalog, setProviderCatalog] = useState<{ default_provider?: string; providers?: any[] } | null>(null);
   
   useEffect(() => {
     const fetchCustomers = async () => {
@@ -40,6 +41,19 @@ function NewSubscriptionContent() {
     
     fetchCustomers();
   }, [customer_id]);
+
+  useEffect(() => {
+    const loadProviders = async () => {
+      try {
+        const catalog = await providerApi.list();
+        setProviderCatalog(catalog);
+      } catch (err: any) {
+        console.error('Error loading providers:', err);
+      }
+    };
+
+    loadProviders();
+  }, []);
   
   const handleSubscriptionCreated = (subscription: any) => {
     // In a real app, you might redirect to the subscription detail page
@@ -100,7 +114,9 @@ function NewSubscriptionContent() {
               <div className="flex items-center justify-between p-4 bg-muted rounded-lg">
                 <div>
                   <p className="text-sm font-medium">Selected Customer</p>
-                  <p className="text-sm text-muted-foreground">
+                  <p className="text-sm text-mu
+                providers={providerCatalog?.providers || []}
+                defaultProvider={providerCatalog?.default_provider}ed-foreground">
                     {customers.find(c => c.id === selectedCustomerId)?.name} ({customers.find(c => c.id === selectedCustomerId)?.email})
                   </p>
                 </div>

@@ -10,7 +10,7 @@ COPY fastapi-payments /fastapi-payments
 # Copy application code
 COPY fastapi-payments-example/backend/ .
 RUN pip install --no-cache-dir -r requirements.txt
-RUN pip install -e /fastapi-payments
+RUN pip install -e /fastapi-payments[cashfree]
 
 # Expose the port the app runs on
 EXPOSE 8000

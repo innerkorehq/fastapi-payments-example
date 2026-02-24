@@ -1,7 +1,7 @@
 "use client";
 import React, { useState, useEffect } from 'react';
 import { format } from 'date-fns';
-import { useForm } from 'react-hook-form';
+import { useForm, Controller } from 'react-hook-form';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -16,11 +16,30 @@ import { Package, Plus, AlertCircle, DollarSign } from 'lucide-react';
 
 // Product creation form component
 const ProductForm = ({ onSuccess, onError }: { onSuccess: (product: any) => void, onError: (message: string | null) => void }) => {
-  const { register, handleSubmit, setError, formState: { errors, isSubmitting }, reset } = useForm();
+  type ProductFormData = {
+    name?: string;
+    description?: string;
+    provider?: string;
+  };
+
+  const { register, handleSubmit, setError, formState: { errors, isSubmitting }, reset, control } = useForm<ProductFormData>({
+    defaultValues: {
+      provider: 'stripe',
+    }
+  });
   
   const onSubmit = async (data: any) => {
     try {
-      const product = await productApi.create(data);
+      // Pass provider in meta_info (library expects meta_info, not metadata)
+      const payload = {
+        name: data.name,
+        description: data.description,
+        meta_info: {
+          provider: data.provider,
+        }
+      };
+      console.log('Creating product with provider:', data.provider, 'Full payload:', payload);
+      const product = await productApi.create(payload);
       onSuccess(product);
       reset();
     } catch (error: any) {
@@ -43,6 +62,33 @@ const ProductForm = ({ onSuccess, onError }: { onSuccess: (product: any) => void
   
   return (
     <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
+      <div className="space-y-2">
+        <Label htmlFor="provider">Payment Provider</Label>
+        <Controller
+          name="provider"
+          control={control}
+          render={({ field }) => (
+            <Select
+              value={field.value}
+              onValueChange={field.onChange}
+            >
+              <SelectTrigger>
+                <SelectValue placeholder="Select provider" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="stripe">Stripe</SelectItem>
+                <SelectItem value="razorpay">Razorpay</SelectItem>
+                <SelectItem value="payu">PayU (Standing Instructions)</SelectItem>
+                <SelectItem value="cashfree">Cashfree</SelectItem>
+              </SelectContent>
+            </Select>
+          )}
+        />
+        {errors.provider && (
+          <p className="text-sm text-destructive">{errors.provider.message?.toString()}</p>
+        )}
+      </div>
+
       <div className="space-y-2">
         <Label htmlFor="name">Product Name</Label>
         <Input
@@ -82,14 +128,16 @@ const PlanForm = ({ productId, onSuccess, onError }: { productId: string, onSucc
     amount?: number;
     billing_interval?: string;
     billing_interval_count?: number;
+    provider?: string;
   };
 
-  const { register, handleSubmit, setError, formState: { errors, isSubmitting }, reset, setValue } = useForm<PlanFormData>({
+  const { register, handleSubmit, setError, formState: { errors, isSubmitting }, reset, control } = useForm<PlanFormData>({
     defaultValues: {
       pricing_model: 'subscription',
       currency: 'USD',
       billing_interval: 'month',
       billing_interval_count: 1,
+      provider: 'stripe',
     }
   });
   
@@ -100,6 +148,9 @@ const PlanForm = ({ productId, onSuccess, onError }: { productId: string, onSucc
         ...data,
         amount: Number.parseFloat(String(data.amount ?? 0)),
         billing_interval_count: Number.parseInt(String(data.billing_interval_count ?? 1), 10),
+        meta_info: {
+          provider: data.provider || 'stripe',
+        },
       };
 
       const plan = await productApi.createPlan(productId, payload);
@@ -150,22 +201,53 @@ const PlanForm = ({ productId, onSuccess, onError }: { productId: string, onSucc
       </div>
       
       <div className="space-y-2">
+        <Label htmlFor="provider">Payment Provider</Label>
+        <Controller
+          name="provider"
+          control={control}
+          render={({ field }) => (
+            <Select
+              value={field.value}
+              onValueChange={field.onChange}
+            >
+              <SelectTrigger id="provider">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="stripe">Stripe</SelectItem>
+                <SelectItem value="razorpay">Razorpay</SelectItem>
+                <SelectItem value="payu">PayU (Standing Instructions)</SelectItem>
+                <SelectItem value="cashfree">Cashfree</SelectItem>
+              </SelectContent>
+            </Select>
+          )}
+        />
+        <p className="text-xs text-muted-foreground">Choose the payment provider for this plan</p>
+      </div>
+      
+      <div className="space-y-2">
         <Label htmlFor="pricing_model">Pricing Model</Label>
-        <Select onValueChange={(value) => setValue('pricing_model', value, { shouldDirty: true, shouldValidate: true })} defaultValue="subscription">
-          <SelectTrigger id="pricing_model">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="subscription">Subscription</SelectItem>
-            <SelectItem value="per_user">Per User</SelectItem>
-            <SelectItem value="tiered">Tiered</SelectItem>
-            <SelectItem value="usage_based">Usage Based</SelectItem>
-            <SelectItem value="freemium">Freemium</SelectItem>
-          </SelectContent>
-        </Select>
-        {/* Ensure RHF knows this field exists by registering it - the Select is a custom
-            component and doesn't automatically register the native input. */}
-        <input type="hidden" {...register('pricing_model')} />
+        <Controller
+          name="pricing_model"
+          control={control}
+          render={({ field }) => (
+            <Select
+              value={field.value}
+              onValueChange={field.onChange}
+            >
+              <SelectTrigger id="pricing_model">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="subscription">Subscription</SelectItem>
+                <SelectItem value="per_user">Per User</SelectItem>
+                <SelectItem value="tiered">Tiered</SelectItem>
+                <SelectItem value="usage_based">Usage Based</SelectItem>
+                <SelectItem value="freemium">Freemium</SelectItem>
+              </SelectContent>
+            </Select>
+          )}
+        />
       </div>
       
       <div className="grid grid-cols-2 gap-4">
@@ -186,38 +268,56 @@ const PlanForm = ({ productId, onSuccess, onError }: { productId: string, onSucc
         
         <div className="space-y-2">
           <Label htmlFor="currency">Currency</Label>
-          <Select onValueChange={(value) => setValue('currency', value, { shouldDirty: true, shouldValidate: true })} defaultValue="USD">
-            <SelectTrigger id="currency">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="USD">USD</SelectItem>
-              <SelectItem value="EUR">EUR</SelectItem>
-              <SelectItem value="GBP">GBP</SelectItem>
-            </SelectContent>
-          </Select>
-            <input type="hidden" {...register('currency')} />
+          <Controller
+            name="currency"
+            control={control}
+            render={({ field }) => (
+              <Select
+                value={field.value}
+                onValueChange={field.onChange}
+              >
+                <SelectTrigger id="currency">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="USD">USD</SelectItem>
+                  <SelectItem value="EUR">EUR</SelectItem>
+                  <SelectItem value="GBP">GBP</SelectItem>
+                  <SelectItem value="INR">INR</SelectItem>
+                </SelectContent>
+              </Select>
+            )}
+          />
         </div>
       </div>
       
       <div className="grid grid-cols-2 gap-4">
         <div className="space-y-2">
           <Label htmlFor="billing_interval">Billing Interval</Label>
-          <Select onValueChange={(value) => setValue('billing_interval', value, { shouldDirty: true, shouldValidate: true })} defaultValue="month">
-            <SelectTrigger id="billing_interval">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="day">Daily</SelectItem>
-              <SelectItem value="week">Weekly</SelectItem>
-              <SelectItem value="month">Monthly</SelectItem>
-              <SelectItem value="year">Yearly</SelectItem>
-            </SelectContent>
-          </Select>
-            <input type="hidden" {...register('billing_interval', { required: 'Billing interval is required' })} />
-            {errors.billing_interval && (
-              <p className="text-sm text-destructive">{errors.billing_interval.message?.toString()}</p>
+          <Controller
+            name="billing_interval"
+            control={control}
+            rules={{ required: 'Billing interval is required' }}
+            render={({ field }) => (
+              <Select
+                value={field.value}
+                onValueChange={field.onChange}
+              >
+                <SelectTrigger id="billing_interval">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="day">Daily</SelectItem>
+                  <SelectItem value="week">Weekly</SelectItem>
+                  <SelectItem value="month">Monthly</SelectItem>
+                  <SelectItem value="year">Yearly</SelectItem>
+                </SelectContent>
+              </Select>
             )}
+          />
+          {errors.billing_interval && (
+            <p className="text-sm text-destructive">{errors.billing_interval.message?.toString()}</p>
+          )}
         </div>
         
         <div className="space-y-2">
